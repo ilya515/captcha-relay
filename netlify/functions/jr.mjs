@@ -144,6 +144,16 @@ export default async (request) => {
     if (!process.env.RELAY_KEY || key !== process.env.RELAY_KEY) {
       return json({ ok: false, error: 'forbidden' }, 403);
     }
+    // Сколько держать вопрос открытым, ожидая письмо. Бот раньше дёргал
+    // реле каждые 0,8 с, и каждый рывок шёл через его канал — на мобильном
+    // интернете через VPN это секунды на пустом месте. Теперь бот задаёт
+    // один вопрос, а реле само смотрит в ящик и отвечает, едва письмо
+    // появится. Потолок восемь секунд: у Netlify функция живёт около десяти,
+    // и упираться в этот предел нельзя — иначе ответа не будет вовсе.
+    const wait = Math.min(8, Math.max(0, Number(url.searchParams.get('wait') || 0)));
+    const deadline = Date.now() + wait * 1000;
+    const nap = (ms) => new Promise((done) => setTimeout(done, ms));
+
     const out = [];
     try {
       // Бот присылает билеты, ответа по которым ждёт. Читать по имени
@@ -152,24 +162,30 @@ export default async (request) => {
       // его сразу. Именно на этом человек терял полминуты после капчи.
       const asked = (url.searchParams.get('jr') || '')
         .split(',').map((one) => one.trim()).filter(Boolean).slice(0, 20);
-      const keys = asked.length
-        ? asked.map(safeKey)
-        : (await mail.list()).blobs.map((b) => b.key);
-      // Перечисление всё равно делаем, когда бот ничего не назвал: после
-      // его перезапуска билеты забыты, а письма в ящике остались.
-      for (const key of keys) {
-        const row = await mail.get(key, { type: 'json' });
-        if (!row) { continue; }
-        await mail.delete(key);
-        // Просроченное не отдаём, но и не держим: заодно и уборка.
-        if (stamp - (row.born || 0) <= LIFETIME_SECONDS) {
-          // born отдаём затем, чтобы бот мог сказать, сколько письмо
-          // пролежало. Без этого не отличить «медленное хранилище» от
-          // «человек долго решал» — а лечится это по-разному.
-          out.push({ jr: row.jr, token: row.token, initData: row.initData,
-                     born: row.born });
+      // Смотрим в ящик, пока не появится письмо или не выйдет срок. Здесь
+      // это дёшево: хранилище рядом с функцией, а не за каналом бота.
+      do {
+        const keys = asked.length
+          ? asked.map(safeKey)
+          : (await mail.list()).blobs.map((b) => b.key);
+        // Перечисление всё равно делаем, когда бот ничего не назвал: после
+        // его перезапуска билеты забыты, а письма в ящике остались.
+        for (const key of keys) {
+          const row = await mail.get(key, { type: 'json' });
+          if (!row) { continue; }
+          await mail.delete(key);
+          // Просроченное не отдаём, но и не держим: заодно и уборка.
+          if (Math.floor(Date.now() / 1000) - (row.born || 0) <= LIFETIME_SECONDS) {
+            // born отдаём затем, чтобы бот мог сказать, сколько письмо
+            // пролежало. Без этого не отличить «медленное хранилище» от
+            // «человек долго решал» — а лечится это по-разному.
+            out.push({ jr: row.jr, token: row.token, initData: row.initData,
+                       born: row.born });
+          }
         }
-      }
+        if (out.length || Date.now() >= deadline) { break; }
+        await nap(250);
+      } while (true);
     } catch (e) {
       return json({ ok: false, error: 'Прочитать не вышло: ' + e }, 500);
     }
