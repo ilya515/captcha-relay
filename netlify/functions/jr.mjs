@@ -149,7 +149,11 @@ export default async (request) => {
         await mail.delete(item.key);
         // Просроченное не отдаём, но и не держим: заодно и уборка.
         if (row && stamp - (row.born || 0) <= LIFETIME_SECONDS) {
-          out.push({ jr: row.jr, token: row.token, initData: row.initData });
+          // born отдаём затем, чтобы бот мог сказать, сколько письмо
+          // пролежало. Без этого не отличить «медленное хранилище» от
+          // «человек долго решал» — а лечится это по-разному.
+          out.push({ jr: row.jr, token: row.token, initData: row.initData,
+                     born: row.born });
         }
       }
     } catch (e) {
