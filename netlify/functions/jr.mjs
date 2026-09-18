@@ -143,12 +143,23 @@ export default async (request) => {
     }
     const out = [];
     try {
-      const { blobs } = await mail.list();
-      for (const item of blobs) {
-        const row = await mail.get(item.key, { type: 'json' });
-        await mail.delete(item.key);
+      // Бот присылает билеты, ответа по которым ждёт. Читать по имени
+      // важно: перечисление в объектном хранилище показывает только что
+      // записанное с задержкой в десятки секунд, а чтение по имени отдаёт
+      // его сразу. Именно на этом человек терял полминуты после капчи.
+      const asked = (url.searchParams.get('jr') || '')
+        .split(',').map((one) => one.trim()).filter(Boolean).slice(0, 20);
+      const keys = asked.length
+        ? asked.map(safeKey)
+        : (await mail.list()).blobs.map((b) => b.key);
+      // Перечисление всё равно делаем, когда бот ничего не назвал: после
+      // его перезапуска билеты забыты, а письма в ящике остались.
+      for (const key of keys) {
+        const row = await mail.get(key, { type: 'json' });
+        if (!row) { continue; }
+        await mail.delete(key);
         // Просроченное не отдаём, но и не держим: заодно и уборка.
-        if (row && stamp - (row.born || 0) <= LIFETIME_SECONDS) {
+        if (stamp - (row.born || 0) <= LIFETIME_SECONDS) {
           // born отдаём затем, чтобы бот мог сказать, сколько письмо
           // пролежало. Без этого не отличить «медленное хранилище» от
           // «человек долго решал» — а лечится это по-разному.
