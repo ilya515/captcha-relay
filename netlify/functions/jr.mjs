@@ -155,7 +155,10 @@ export default async (request) => {
     } catch (e) {
       return json({ ok: false, error: 'Прочитать не вышло: ' + e }, 500);
     }
-    return json({ ok: true, mail: out });
+    // Поле называется именно items: его и читает бот. Названо иначе —
+    // бот заберёт письма из ящика и молча выбросит, а человек останется
+    // за дверью. Ровно так и случилось при переезде с Cloudflare.
+    return json({ ok: true, items: out });
   }
 
   return json({ ok: false, error: 'unknown path' }, 404);
